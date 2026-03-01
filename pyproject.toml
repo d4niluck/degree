@@ -1,0 +1,29 @@
+[project]
+name = "degree"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.12"
+dependencies = [
+    "einops>=0.8.2",
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.1",
+    "paddleocr>=3.4.0",
+    "paddlepaddle==3.3.0",
+    "pillow>=12.1.0",
+    "pymupdf>=1.26.7",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "sentence-transformers>=5.2.2",
+    "torch>=2.10.0",
+    "tqdm>=4.67.1",
+    "transformers>=5.0.0",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+]
