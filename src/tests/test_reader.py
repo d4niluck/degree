@@ -3,7 +3,6 @@ from typing import Optional
 from src.preprocessing import Reader, Document
 from pathlib import Path
 import logging
-import os
 
 
 logger = logging.getLogger()
