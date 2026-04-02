@@ -109,16 +109,6 @@ class AutoEDAIndex:
             self._row("embeddings", "dtype", str(vectors.dtype)),
         ]
 
-        norms = np.linalg.norm(vectors, axis=1)
-        rows.extend(
-            [
-                self._row("embeddings", "norm_mean", float(np.mean(norms))),
-                self._row("embeddings", "norm_std", float(np.std(norms))),
-                self._row("embeddings", "norm_min", float(np.min(norms))),
-                self._row("embeddings", "norm_max", float(np.max(norms))),
-            ]
-        )
-
         dimension_std = np.std(vectors, axis=0)
         rows.extend(
             [
