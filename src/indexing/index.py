@@ -150,7 +150,7 @@ class Index:
         allowed_doc_ids = self._resolve_doc_ids(doc_ids=doc_ids, source_paths=source_paths)
         allowed_vector_ids = self._get_vector_ids_by_doc_ids(allowed_doc_ids) if allowed_doc_ids else None
 
-        query_vector = self.embedder.get_embeddings([query])
+        query_vector = self.embedder.get_embeddings([query], text_type="query")
         query_vector = np.asarray(query_vector)[0]
         vector_ids, scores = self.vectorstore.search(
             query_vector,
@@ -495,7 +495,7 @@ class Index:
                 self.chunkstore.add(chunk)
 
             texts = [chunk.text for chunk in chunks]
-            vectors = self.embedder.get_embeddings(texts)
+            vectors = self.embedder.get_embeddings(texts, text_type="document")
             vectors = np.asarray(vectors)
             if vectors.ndim == 1:
                 vectors = vectors.reshape(1, -1)
