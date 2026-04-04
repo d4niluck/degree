@@ -19,7 +19,7 @@ class Embedder:
     def get_embeddings(
         self,
         texts: Iterable[str],
-        batch_size: int = 100,
+        batch_size: int = 256,
         normalize: bool = True,
         text_type: Optional[str] = None,
     ):
@@ -50,3 +50,60 @@ class Embedder:
                 torch.mps.empty_cache()
             except Exception:
                 pass
+
+
+class HTTPEmbedder:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8001",
+        timeout: float = 120.0,
+        max_texts_per_request: int = 64,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.max_texts_per_request = max_texts_per_request
+        self.session = requests.Session()
+        
+    def get_embeddings(
+        self,
+        texts,
+        batch_size: int = 100,
+        normalize: bool = True,
+        text_type: str | None = None,
+    ):
+        texts = list(texts)
+        batches = self._split_texts(texts)
+
+        all_embeddings = []
+        for batch in batches:
+            response = self.session.post(
+                f"{self.base_url}/embeddings",
+                json={
+                    "texts": batch,
+                    "batch_size": batch_size,
+                    "normalize": normalize,
+                    "text_type": text_type,
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            all_embeddings.extend(payload["embeddings"])
+        return np.asarray(all_embeddings, dtype=np.float32)
+
+    def get_memory_usage(self):
+        response = self.session.get(
+            f"{self.base_url}/embeddings/memory",
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _split_texts(self, texts):
+        if len(texts) > self.max_texts_per_request:
+            step = self.max_texts_per_request
+            batches = [texts[i:i+step] for i in range(0, len(texts), step)]
+            return batches
+        else:
+            batches = [texts]
+        return batches

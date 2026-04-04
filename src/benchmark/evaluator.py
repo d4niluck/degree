@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import math
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
+from tqdm import tqdm
 
 from ..llm.llm import BaseLLM
 from .schemas import (
@@ -77,29 +79,16 @@ class BenchmarkEvaluator:
         benchmark_path: str,
         answer_fn: Callable[[str], str],
         experiment_name: str,
+        batch: bool = True,
+        batch_size: int = 5,
     ) -> Dict[str, object]:
         samples = self.load(benchmark_path)
-        answer_rows: List[Dict[str, Any]] = []
-
-        for sample in samples:
-            agent_answer = self._call_answer_fn(answer_fn=answer_fn, question=sample.question)
-            judge_result = self._judge_sample(sample=sample, agent_answer=agent_answer)
-            metrics = self._extract_metrics(judge_result=judge_result)
-            answer_rows.append(
-                {
-                    "sample_id": sample.sample_id,
-                    "question_type": sample.question_type.value,
-                    "question": sample.question,
-                    "gold_answer": sample.gold_answer,
-                    "agent_answer": agent_answer,
-                    "source_path": sample.source_path,
-                    "page_number": sample.page_number,
-                    "judge_schema_name": sample.judge_schema_name,
-                    "judge_result": json.dumps(judge_result.model_dump(mode="json"), ensure_ascii=False),
-                    "criteria": json.dumps(sample.criteria, ensure_ascii=False),
-                    **metrics,
-                }
-            )
+        answer_rows = self._evaluate_samples(
+            samples=samples,
+            answer_fn=answer_fn,
+            batch=batch,
+            batch_size=batch_size,
+        )
 
         answers_df = pd.DataFrame(answer_rows)
         metrics_df = self._build_metrics_report(answers_df)
@@ -128,6 +117,53 @@ class BenchmarkEvaluator:
             "summary_path": str(summary_path),
             "answers_df": answers_df,
             "metrics_df": metrics_df,
+        }
+
+    def _evaluate_samples(
+        self,
+        samples: List[BenchmarkSample],
+        answer_fn: Callable[[str], str],
+        batch: bool,
+        batch_size: int,
+    ) -> List[Dict[str, Any]]:
+        if not batch:
+            rows: List[Dict[str, Any]] = []
+            for sample in tqdm(samples, desc="Evaluating benchmark"):
+                rows.append(self._evaluate_single_sample(sample=sample, answer_fn=answer_fn))
+            return rows
+
+        max_workers = max(1, batch_size)
+        ordered_rows: List[Optional[Dict[str, Any]]] = [None] * len(samples)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(self._evaluate_single_sample, sample, answer_fn): idx
+                for idx, sample in enumerate(samples)
+            }
+            for future in tqdm(as_completed(future_to_index), total=len(samples), desc="Evaluating benchmark"):
+                idx = future_to_index[future]
+                ordered_rows[idx] = future.result()
+        return [row for row in ordered_rows if row is not None]
+
+    def _evaluate_single_sample(
+        self,
+        sample: BenchmarkSample,
+        answer_fn: Callable[[str], str],
+    ) -> Dict[str, Any]:
+        agent_answer = self._call_answer_fn(answer_fn=answer_fn, question=sample.question)
+        judge_result = self._judge_sample(sample=sample, agent_answer=agent_answer)
+        metrics = self._extract_metrics(judge_result=judge_result)
+        return {
+            "sample_id": sample.sample_id,
+            "question_type": sample.question_type.value,
+            "question": sample.question,
+            "gold_answer": sample.gold_answer,
+            "agent_answer": agent_answer,
+            "source_path": sample.source_path,
+            "page_number": sample.page_number,
+            "judge_schema_name": sample.judge_schema_name,
+            "judge_result": json.dumps(judge_result.model_dump(mode="json"), ensure_ascii=False),
+            "criteria": json.dumps(sample.criteria, ensure_ascii=False),
+            **metrics,
         }
 
     def _call_answer_fn(self, answer_fn: Callable[[str], str], question: str) -> str:
