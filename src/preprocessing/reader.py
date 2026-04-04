@@ -5,6 +5,7 @@ from tqdm import tqdm
 import re
 import fitz # type: ignore
 import logging
+import requests
 
 from .schema import Document, Page
 
@@ -156,3 +157,32 @@ class DOCXReader(BaseReader):
     
     def read(self, file_path: str) -> Optional[Document]:
         raise NotImplementedError()
+
+
+class HTTPReader:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8002",
+        timeout: float = 300.0,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    def read(self, file_path: str, forced_ocr: bool = False) -> Optional[Document]:
+        response = self.session.post(
+            f"{self.base_url}/reader/read",
+            json={
+                "file_path": file_path,
+                "forced_ocr": forced_ocr,
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        pages = [Page(number=page["number"], text=page["text"]) for page in payload["pages"]]
+        return Document(
+            source_path=payload["source_path"],
+            pages=pages,
+            doc_id=payload.get("doc_id"),
+        )
