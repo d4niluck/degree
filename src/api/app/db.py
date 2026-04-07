@@ -41,6 +41,12 @@ def init_db(db_path: str | Path) -> None:
         )
         conn.execute(
             """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_bases_owner_name
+            ON knowledge_bases(owner_user_id, name)
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_kb_access (
                 user_id TEXT NOT NULL,
                 kb_id TEXT NOT NULL,

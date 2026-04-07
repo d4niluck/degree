@@ -36,8 +36,3 @@ Draft работы: [link](https://docs.google.com/document/d/19016jYBnuMW9QiVjr
 - `procedure`: пошаговые инструкции, метрики `step recall`, `order accuracy`, `hallucination rate`.
 - `comparison`: сравнение сущностей по заданным осям, метрика `attribute-level accuracy`.
 - `negative`: вопросы без ответа в документации, метрика `abstention accuracy`.
-
-Результаты сохраняются в [src/benchmark/results](/Users/danilaandreev/Documents/HSE/degree/src/benchmark/results) с именем эксперимента и точным временем запуска. Для работы добавлены отдельные notebooks:
-
-- [src/benchmark/notebooks/generate_benchmark.ipynb](/Users/danilaandreev/Documents/HSE/degree/src/benchmark/notebooks/generate_benchmark.ipynb)
-- [src/benchmark/notebooks/evaluate_benchmark.ipynb](/Users/danilaandreev/Documents/HSE/degree/src/benchmark/notebooks/evaluate_benchmark.ipynb)

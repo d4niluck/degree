@@ -19,6 +19,7 @@ dependencies = [
     "pytest-cov>=7.0.0",
     "python-dotenv>=1.2.1",
     "sentence-transformers>=5.2.2",
+    "streamlit>=1.49.0",
     "torch>=2.10.0",
     "tqdm>=4.67.1",
     "transformers>=5.0.0",

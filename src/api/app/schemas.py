@@ -33,6 +33,10 @@ class KnowledgeBaseCreateRequest(BaseModel):
     name: str
 
 
+class UserKnowledgeBaseCreateRequest(BaseModel):
+    name: str
+
+
 class KnowledgeBaseAccessRequest(BaseModel):
     user_id: str
     access_role: str = "reader"

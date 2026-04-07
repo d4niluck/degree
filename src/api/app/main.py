@@ -19,27 +19,55 @@ from .user import router as user_router
 load_dotenv()
 
 
-def ensure_default_admin(app_db_path: Path) -> None:
-    login = os.getenv("APP_ADMIN_LOGIN")
-    password = os.getenv("APP_ADMIN_PASSWORD")
-    if not login or not password:
-        return
-
+def ensure_default_user(
+    app_db_path: Path,
+    *,
+    user_id: str,
+    login: str,
+    password: str,
+    role: str,
+) -> None:
     conn = connect(app_db_path)
     existing = conn.execute(
-        "SELECT 1 FROM users WHERE login = ?",
+        "SELECT user_id FROM users WHERE login = ?",
         (login,),
     ).fetchone()
-    if not existing:
-        with conn:
+    with conn:
+        if existing:
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, role = ?, is_active = 1
+                WHERE login = ?
+                """,
+                (hash_password(password), role, login),
+            )
+        else:
             conn.execute(
                 """
                 INSERT INTO users (user_id, login, password_hash, role, is_active, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (login, login, hash_password(password), "admin", 1, now_iso()),
+                (user_id, login, hash_password(password), role, 1, now_iso()),
             )
     conn.close()
+
+
+def ensure_default_accounts(app_db_path: Path) -> None:
+    ensure_default_user(
+        app_db_path,
+        user_id="admin",
+        login=os.getenv("APP_ADMIN_LOGIN", "admin"),
+        password=os.getenv("APP_ADMIN_PASSWORD", "admin"),
+        role="admin",
+    )
+    ensure_default_user(
+        app_db_path,
+        user_id="user",
+        login=os.getenv("APP_USER_LOGIN", "user"),
+        password=os.getenv("APP_USER_PASSWORD", "user"),
+        role="user",
+    )
 
 
 def create_app() -> FastAPI:
@@ -50,7 +78,7 @@ def create_app() -> FastAPI:
     app_db_path = root / "app.db"
     index_storage_root = root / "indexes"
     init_db(app_db_path)
-    ensure_default_admin(app_db_path)
+    ensure_default_accounts(app_db_path)
 
     client = OpenAI(
         api_key=os.getenv("OPEN_AI_KEY"),

@@ -52,3 +52,8 @@ class IndexManager:
         for index in self._cache.values():
             index.close()
         self._cache.clear()
+
+    def close_index(self, kb_id: str) -> None:
+        index = self._cache.pop(kb_id, None)
+        if index:
+            index.close()

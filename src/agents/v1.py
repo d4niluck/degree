@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -39,8 +39,8 @@ class V1Agent(BaseAgent):
             "answer": None,
         }
 
-    def answer(self, question: str) -> str:
-        extracted = self.index.search(question, top_k=self.top_k)
+    def answer(self, question: str, source_paths: Optional[List[str]] = None) -> str:
+        extracted = self.index.search(question, top_k=self.top_k, source_paths=source_paths)
         context = "\n\n".join(
             [f"{i + 1}. {result.chunk['text']}" for i, result in enumerate(extracted)]
         )
