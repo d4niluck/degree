@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -57,6 +58,22 @@ def delete_user(target_user_id: str, request: Request, user=Depends(get_current_
     return {"ok": True}
 
 
+@router.get("/knowledge-bases")
+def list_knowledge_bases(request: Request, user=Depends(get_current_user)):
+    require_admin(user)
+    conn = connect(request.app.state.app_db_path)
+    rows = conn.execute(
+        """
+        SELECT kb.kb_id, kb.owner_user_id, u.login AS owner_login, kb.name, kb.storage_path, kb.created_at
+        FROM knowledge_bases kb
+        LEFT JOIN users u ON u.user_id = kb.owner_user_id
+        ORDER BY kb.created_at
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 @router.post("/knowledge-bases")
 def create_knowledge_base(
     payload: KnowledgeBaseCreateRequest,
@@ -74,6 +91,18 @@ def create_knowledge_base(
         ).fetchone()
         if not owner:
             raise HTTPException(status_code=404, detail="Owner not found")
+        duplicate = conn.execute(
+            """
+            SELECT 1 FROM knowledge_bases
+            WHERE owner_user_id = ? AND name = ?
+            """,
+            (payload.owner_user_id, payload.name),
+        ).fetchone()
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail="Knowledge base with this name already exists for this user",
+            )
         conn.execute(
             """
             INSERT INTO knowledge_bases (kb_id, owner_user_id, name, storage_path, created_at)
@@ -90,6 +119,24 @@ def create_knowledge_base(
         )
     conn.close()
     return {"kb_id": kb_id, "owner_user_id": payload.owner_user_id, "name": payload.name, "storage_path": storage_path}
+
+
+@router.delete("/knowledge-bases/{kb_id}")
+def delete_knowledge_base(kb_id: str, request: Request, user=Depends(get_current_user)):
+    require_admin(user)
+    conn = connect(request.app.state.app_db_path)
+    row = conn.execute(
+        "SELECT storage_path FROM knowledge_bases WHERE kb_id = ?",
+        (kb_id,),
+    ).fetchone()
+    with conn:
+        conn.execute("DELETE FROM user_kb_access WHERE kb_id = ?", (kb_id,))
+        conn.execute("DELETE FROM knowledge_bases WHERE kb_id = ?", (kb_id,))
+    conn.close()
+    request.app.state.index_manager.close_index(kb_id)
+    if row:
+        shutil.rmtree(row["storage_path"], ignore_errors=True)
+    return {"ok": True}
 
 
 @router.post("/knowledge-bases/{kb_id}/access")
