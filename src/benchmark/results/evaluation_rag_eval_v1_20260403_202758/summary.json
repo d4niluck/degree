@@ -1,0 +1,15 @@
+{
+  "experiment_name": "rag_eval_v1",
+  "created_at": "2026-04-03T20:27:58",
+  "judge_model_name": "gpt-5.2",
+  "benchmark_path": "/Users/danilaandreev/Documents/HSE/degree/src/benchmark/results/generation_benchmark_v1_20260402_212121/benchmark.jsonl",
+  "samples": 300,
+  "question_types": [
+    "choice",
+    "comparison",
+    "factual",
+    "multi_fact",
+    "negative",
+    "procedure"
+  ]
+}

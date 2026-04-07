@@ -21,3 +21,18 @@ Draft работы: [link](https://docs.google.com/document/d/19016jYBnuMW9QiVjr
 * [ ] Дообучение модели, фиксация результатов
 * [ ] Анализ полученных результатов и выбор модели
 * [ ] Проектирование и разработка сервиса, тестирование
+
+## Benchmark
+
+В проекте реализован benchmark для оценки RAG по технической документации. Код находится в [src/benchmark](/Users/danilaandreev/Documents/HSE/degree/src/benchmark) и состоит из двух основных частей:
+
+- `BenchmarkGenerator` генерирует QA-датасет по PDF-документам. Для каждого примера сохраняются вопрос, эталонный ответ, тип вопроса, фрагмент источника и формальные критерии оценки.
+- `BenchmarkEvaluator` загружает готовый benchmark, вызывает агента через `answer_fn`, оценивает ответы одной LLM-моделью с `temperature=0` и формирует отчет.
+
+Поддерживаются 6 типов вопросов:
+
+- `factual` и `choice`: один правильный ответ, метрика `accuracy`.
+- `multi_fact`: набор atomic facts, метрики `precision`, `recall`, `F1`.
+- `procedure`: пошаговые инструкции, метрики `step recall`, `order accuracy`, `hallucination rate`.
+- `comparison`: сравнение сущностей по заданным осям, метрика `attribute-level accuracy`.
+- `negative`: вопросы без ответа в документации, метрика `abstention accuracy`.
