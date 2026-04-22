@@ -1,9 +1,11 @@
+import logging
 import numpy as np
 import requests
 from typing import Callable, Dict, Iterable, List, Optional
 from sentence_transformers import SentenceTransformer
 import torch
 import gc
+import psutil
 
 
 class Embedder:
@@ -58,11 +60,13 @@ class HTTPEmbedder:
         base_url: str = "http://127.0.0.1:8001",
         timeout: float = 120.0,
         max_texts_per_request: int = 64,
+        logger: Optional[logging.Logger] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_texts_per_request = max_texts_per_request
         self.session = requests.Session()
+        self.logger = logger
         
     def get_embeddings(
         self,
@@ -75,7 +79,10 @@ class HTTPEmbedder:
         batches = self._split_texts(texts)
 
         all_embeddings = []
-        for batch in batches:
+        for batch_index, batch in enumerate(batches, start=1):
+            self._log_memory(
+                f"HTTPEmbedder: batch {batch_index}/{len(batches)} before request"
+            )
             response = self.session.post(
                 f"{self.base_url}/embeddings",
                 json={
@@ -89,6 +96,9 @@ class HTTPEmbedder:
             response.raise_for_status()
             payload = response.json()
             all_embeddings.extend(payload["embeddings"])
+            self._log_memory(
+                f"HTTPEmbedder: batch {batch_index}/{len(batches)} after request"
+            )
         return np.asarray(all_embeddings, dtype=np.float32)
 
     def get_memory_usage(self):
@@ -107,3 +117,40 @@ class HTTPEmbedder:
         else:
             batches = [texts]
         return batches
+
+    def _log_memory(self, prefix: str) -> None:
+        if self.logger is None:
+            return
+        try:
+            memory = self.get_memory_usage()
+            self.logger.info("%s | memory=%s", prefix, memory)
+        except Exception as exc:
+            self.logger.warning("%s | failed to fetch memory usage: %s", prefix, exc)
+
+
+def get_process_memory_usage() -> Dict[str, Optional[float] | str]:
+    process = psutil.Process()
+    memory: Dict[str, Optional[float] | str] = {
+        "cpu_rss_mb": process.memory_info().rss / (1024 * 1024),
+    }
+
+    if torch.cuda.is_available():
+        memory["device"] = "cuda"
+        memory["cuda_allocated_mb"] = torch.cuda.memory_allocated() / (1024 * 1024)
+        memory["cuda_reserved_mb"] = torch.cuda.memory_reserved() / (1024 * 1024)
+    elif torch.backends.mps.is_available():
+        memory["device"] = "mps"
+        try:
+            memory["mps_current_allocated_mb"] = (
+                torch.mps.current_allocated_memory() / (1024 * 1024)
+            )
+            memory["mps_driver_allocated_mb"] = (
+                torch.mps.driver_allocated_memory() / (1024 * 1024)
+            )
+        except Exception:
+            memory["mps_current_allocated_mb"] = None
+            memory["mps_driver_allocated_mb"] = None
+    else:
+        memory["device"] = "cpu"
+
+    return memory

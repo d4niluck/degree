@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Type
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class QuestionType(str, Enum):
@@ -21,7 +21,7 @@ class BenchmarkSample(BaseModel):
     question: str
     gold_answer: str
     source_path: str
-    page_number: int
+    page_number: Optional[int] = None
     source_excerpt: str
     criteria: Dict[str, object] = Field(
         default_factory=dict,
@@ -29,6 +29,13 @@ class BenchmarkSample(BaseModel):
     )
     judge_schema_name: str
     metadata: Dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("page_number", mode="before")
+    @classmethod
+    def _normalize_page_number(cls, value):
+        if value == "":
+            return None
+        return value
 
 
 class GenerationBatch(BaseModel):
@@ -150,7 +157,14 @@ class MultiFactJudgeResult(BaseModel):
 
 class ProcedureJudgeResult(BaseModel):
     reasoning: List[str]
-    covered_required_steps: List[str] = Field(default_factory=list)
+    covered_required_steps: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Required steps recognized in the agent answer, normalized to the exact "
+            "step names from criteria.required_steps and listed in the same order as "
+            "they appear in the agent answer"
+        ),
+    )
     missing_required_steps: List[str] = Field(default_factory=list)
     covered_optional_steps: List[str] = Field(default_factory=list)
     hallucinated_steps: List[str] = Field(default_factory=list)

@@ -5,6 +5,7 @@ from uuid import uuid4
 import streamlit as st
 import pandas as pd
 import requests
+from streamlit_pdf_viewer import pdf_viewer
 
 from schemas import KnowledgeBaseCreateForm, UserCreateForm, UserKnowledgeBaseCreateForm
 
@@ -252,33 +253,43 @@ def render_role_picker() -> None:
 
 def render_global_header() -> None:
     role = st.session_state.get("role")
-    _, right = st.columns([8, 1])
-    with right:
-        st.button("Профиль", use_container_width=True, on_click=reset_role)
+    _, refresh_col, edit_col, profile_col = st.columns([6, 1, 1.5, 1])
 
-    if role == 'user':
-        pass
-    if role == 'admin':
-        pass
+    if role == "admin":
+        with refresh_col:
+            if st.button("Обновить", key="refresh_admin_data", use_container_width=True):
+                invalidate_admin_tables()
+        with edit_col:
+            st.button(
+                "Закрыть редактирование" if st.session_state.get("admin_edit_mode", False) else "Режим редактирования",
+                key="toggle_admin_edit_mode",
+                use_container_width=True,
+                on_click=toggle_admin_edit_mode,
+            )
+
+    if role == "user":
+        with refresh_col:
+            if st.button("Обновить", key="refresh_user_data", use_container_width=True):
+                invalidate_user_data()
+        with edit_col:
+            st.button(
+                "Закрыть редактирование" if st.session_state.get("user_edit_mode", False) else "Режим редактирования",
+                key="toggle_user_edit_mode",
+                use_container_width=True,
+                on_click=toggle_user_edit_mode,
+            )
+
+    with profile_col:
+        st.button("Профиль", key="reset_role", use_container_width=True, on_click=reset_role)
+    st.divider()
     
 
 def render_admin() -> None:
-    render_global_header()
-    st.title("Панель управления")
-
     if "admin_edit_mode" not in st.session_state:
         st.session_state["admin_edit_mode"] = False
 
-    refresh_col, edit_col, _ = st.columns([1, 1.5, 5])
-    with refresh_col:
-        if st.button("Обновить", use_container_width=True):
-            invalidate_admin_tables()
-    with edit_col:
-        st.button(
-            "Закрыть редактирование" if st.session_state["admin_edit_mode"] else "Режим редактирования",
-            use_container_width=True,
-            on_click=toggle_admin_edit_mode,
-        )
+    render_global_header()
+    st.title("Панель управления")
 
     edit_mode = st.session_state["admin_edit_mode"]
     col1, col2 = st.columns(2)
@@ -400,23 +411,10 @@ def render_knowledge_bases_panel(edit_mode: bool) -> None:
 
 
 def render_user() -> None:
-    render_global_header()
-    st.title("Пользователь")
-
     if "user_edit_mode" not in st.session_state:
         st.session_state["user_edit_mode"] = False
 
-    refresh_col, edit_col, _ = st.columns([1, 1.5, 5])
-    with refresh_col:
-        if st.button("Обновить", key="refresh_user_data", use_container_width=True):
-            invalidate_user_data()
-    with edit_col:
-        st.button(
-            "Закрыть редактирование" if st.session_state["user_edit_mode"] else "Режим редактирования",
-            key="toggle_user_edit_mode",
-            use_container_width=True,
-            on_click=toggle_user_edit_mode,
-        )
+    render_global_header()
 
     kb_df = get_user_knowledge_bases_df()
     if kb_df.empty:
@@ -429,8 +427,7 @@ def render_user() -> None:
             return
 
     col1, col2 = st.columns([1.1, 0.9])
-    with col2:
-        st.subheader("База знаний")
+    with col2:            
         kb_id = render_user_kb_selector(kb_df)
         if not kb_id:
             return
@@ -453,13 +450,19 @@ def get_user_knowledge_bases_df() -> pd.DataFrame:
 
 
 def render_user_kb_selector(kb_df: pd.DataFrame) -> str | None:
+    subcol1, _, subcol2 = st.columns([3, 2, 3])
+    with subcol1:
+        st.subheader("База знаний")
+    with subcol2:
+        st.write("")
+        if st.button("Добавить базу", use_container_width=True):
+            st.session_state["show_user_create_kb_form"] = True
+
     select_col, create_col = st.columns([4, 1])
     names = kb_df["name"].tolist()
     with select_col:
-        selected_name = st.selectbox("База знаний", names)
+        selected_name = st.selectbox("База знаний", names, label_visibility="collapsed")
     with create_col:
-        st.write("")
-        st.write("")
         selected_row = kb_df[kb_df["name"] == selected_name]
         if selected_row.empty:
             return None
@@ -471,12 +474,6 @@ def render_user_kb_selector(kb_df: pd.DataFrame) -> str | None:
                 st.rerun()
             except Exception as exc:
                 st.error(f"Не удалось удалить базу знаний: {exc}")
-
-    left, right = st.columns([3, 8])
-    with left:
-        if st.button("Добавить базу", use_container_width=True):
-            st.session_state["show_user_create_kb_form"] = True
-
 
     if st.session_state.get("show_user_create_kb_form"):
         with st.form("user_create_kb_form"):
@@ -533,7 +530,14 @@ def render_assistant_chat(kb_id: str, selected_source_paths: list[str] | None) -
 
 
 def render_user_documents_panel(kb_id: str) -> list[str] | None:
-    st.subheader("Документы")
+    title_col, _, upload_col = st.columns([3, 2, 3])
+    with title_col:
+        st.subheader("Документы")
+    with upload_col:
+        st.write("")
+        if st.button("Загрузить новый документ", key=f"open_upload_{kb_id}", use_container_width=True):
+            st.session_state[f"show_document_upload_{kb_id}"] = True
+            st.rerun()
 
     doc_state_key = f"user_documents_df_{kb_id}"
     if st.session_state.get("selected_kb_id") != kb_id:
@@ -595,28 +599,77 @@ def render_user_documents_panel(kb_id: str) -> list[str] | None:
                     st.error(f"Не удалось удалить документы: {exc}")
 
     selected_paths = edited_df[edited_df["use"]]["source_path"].dropna().tolist()
-    # TODO: вернуть preview PDF, когда будет выбран стабильный viewer для Streamlit.
     render_document_upload(kb_id)
+    render_document_pdf_viewer(kb_id, documents_df)
     return selected_paths
 
 
 def render_document_upload(kb_id: str) -> None:
+    show_upload_key = f"show_document_upload_{kb_id}"
     upload_key_state = f"upload_key_{kb_id}"
+
+    if show_upload_key not in st.session_state:
+        st.session_state[show_upload_key] = False
     if upload_key_state not in st.session_state:
         st.session_state[upload_key_state] = uuid4().hex
 
+    if not st.session_state[show_upload_key]:
+        return
+
     uploader_key = f"document_uploader_{kb_id}_{st.session_state[upload_key_state]}"
     uploaded_file = st.file_uploader("Загрузить новый файл", type=["pdf"], key=uploader_key)
-    if uploaded_file and st.button("Добавить документ", use_container_width=True):
-        try:
-            file_path = save_uploaded_file(uploaded_file)
-            with st.spinner("Добавляю документ в индекс"):
-                add_document(kb_id, file_path)
+    action_col, cancel_col = st.columns(2)
+    with action_col:
+        if uploaded_file and st.button("Добавить документ", key=f"add_document_{kb_id}", use_container_width=True):
+            try:
+                file_path = save_uploaded_file(uploaded_file)
+                with st.spinner("Добавляю документ в индекс"):
+                    add_document(kb_id, file_path)
+                st.session_state[upload_key_state] = uuid4().hex
+                st.session_state[show_upload_key] = False
+                st.success("Документ добавлен")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Не удалось добавить документ: {exc}")
+    with cancel_col:
+        if st.button("Отмена", key=f"cancel_upload_{kb_id}", use_container_width=True):
             st.session_state[upload_key_state] = uuid4().hex
-            st.success("Документ добавлен")
+            st.session_state[show_upload_key] = False
             st.rerun()
-        except Exception as exc:
-            st.error(f"Не удалось добавить документ: {exc}")
+
+
+def render_document_pdf_viewer(kb_id: str, documents_df: pd.DataFrame) -> None:
+    if documents_df.empty:
+        return
+
+    options = ["Выбрать докуент для просмотра"] + documents_df["name"].tolist()
+    selected_name = st.selectbox(
+        "Документ для просмотра",
+        options,
+        index=0,
+        key=f"pdf_preview_select_{kb_id}",
+        label_visibility="collapsed"
+    )
+    if not selected_name:
+        return
+
+    selected_row = documents_df[documents_df["name"] == selected_name]
+    if selected_row.empty:
+        return
+
+    source_path = selected_row.iloc[0]["source_path"]
+    if not source_path or not Path(source_path).exists():
+        st.warning("Файл для просмотра не найден")
+        return
+
+    pdf_viewer(
+        source_path,
+        width=700,
+        height=1000,
+        zoom_level=1.2,
+        viewer_align="center",
+        show_page_separator=True,
+    )
 
 
 role = st.session_state.get("role")

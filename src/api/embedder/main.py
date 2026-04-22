@@ -1,13 +1,12 @@
+import logging
+import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Optional
-import os
 from dotenv import load_dotenv
-import psutil
-import torch
 load_dotenv()
 
-from src.preprocessing import Embedder
+from src.preprocessing import Embedder, get_process_memory_usage
 
 
 class EmbedderRequest(BaseModel):
@@ -27,41 +26,31 @@ embedder = Embedder(
 )
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 @app.post("/embeddings")
 def get_embeddings(payload: EmbedderRequest):
-    embedd = embedder.get_embeddings(
-        texts=payload.texts,
-        batch_size=payload.batch_size,
-        normalize=payload.normalize,
-        text_type=payload.text_type,
-    )
-    return {"embeddings": embedd.tolist()}
+    logger.info("Embedder request start | memory=%s", get_process_memory_usage())
+    embedd = None
+    try:
+        embedd = embedder.get_embeddings(
+            texts=payload.texts,
+            batch_size=payload.batch_size,
+            normalize=payload.normalize,
+            text_type=payload.text_type,
+        )
+        return {"embeddings": embedd.tolist()}
+    finally:
+        if embedd is not None:
+            del embedd
+        embedder.clear_torch_cache()
+        logger.info("Embedder request end | memory=%s", get_process_memory_usage())
 
 
 @app.get("/embeddings/memory")
 def get_memory_usage():
-    process = psutil.Process(os.getpid())
-    memory = {
-        "device": str(getattr(embedder.model, "device", "unknown")),
-        "cpu_rss_mb": process.memory_info().rss / (1024 * 1024),
-    }
-
-    if torch.cuda.is_available():
-        memory["cuda_allocated_mb"] = torch.cuda.memory_allocated() / (1024 * 1024)
-        memory["cuda_reserved_mb"] = torch.cuda.memory_reserved() / (1024 * 1024)
-    elif torch.backends.mps.is_available():
-        try:
-            memory["mps_current_allocated_mb"] = (
-                torch.mps.current_allocated_memory() / (1024 * 1024)
-            )
-            memory["mps_driver_allocated_mb"] = (
-                torch.mps.driver_allocated_memory() / (1024 * 1024)
-            )
-        except Exception:
-            memory["mps_current_allocated_mb"] = None
-            memory["mps_driver_allocated_mb"] = None
-
+    memory = get_process_memory_usage()
+    memory["device"] = str(getattr(embedder.model, "device", memory.get("device", "unknown")))
     return memory
 
 # uvicorn src.api.embedder.main:app --host 127.0.0.1 --port 8001 --reload

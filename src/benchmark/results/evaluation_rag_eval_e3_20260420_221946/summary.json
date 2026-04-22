@@ -1,0 +1,10 @@
+{
+  "experiment_name": "rag_eval_e3",
+  "created_at": "2026-04-20T22:50:54",
+  "judge_model_name": "gpt-5.2",
+  "benchmark_path": "/Users/danilaandreev/Documents/HSE/degree/src/benchmark/results/generation_benchmark_v1_20260402_212121/benchmark.jsonl",
+  "samples": 120,
+  "samples_completed": 120,
+  "status": "completed",
+  "error_message": null
+}

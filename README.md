@@ -36,3 +36,7 @@ Draft работы: [link](https://docs.google.com/document/d/19016jYBnuMW9QiVjr
 - `procedure`: пошаговые инструкции, метрики `step recall`, `order accuracy`, `hallucination rate`.
 - `comparison`: сравнение сущностей по заданным осям, метрика `attribute-level accuracy`.
 - `negative`: вопросы без ответа в документации, метрика `abstention accuracy`.
+
+## Chunking
+
+В проекте используется `ParagraphChunker`: текст сначала делится на абзацы, затем длинные абзацы разбиваются на чанки по предложениям с overlap в одно предложение. Overlap применяется только внутри одного абзаца и входит в общий лимит длины чанка, поэтому чанк не превышает заданный размер и не режется по случайным символам.

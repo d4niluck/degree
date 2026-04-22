@@ -13,6 +13,7 @@ import numpy as np
 
 from ..preprocessing.chunker import BaseChunker
 from ..preprocessing.schema import Document
+from .bm25store import BaseBM25Store
 from .chunkstore import ChunkStore
 from .datastore import DataStore
 from .vectorstore import VetorStore
@@ -43,6 +44,7 @@ class Index:
         reader: "Reader",
         sqlite_path: str,
         logger: logging.Logger,
+        bm25store: Optional[BaseBM25Store] = None,
     ) -> None:
         self.datastore = datastore
         self.vectorstore = vectorstore
@@ -52,6 +54,7 @@ class Index:
         self.reader = reader
         self.logger = logger
         self.sqlite_path = sqlite_path
+        self.bm25store = bm25store
         self.conn = sqlite3.connect(self.sqlite_path)
         self.conn.row_factory = sqlite3.Row
         self._init_db()
@@ -147,6 +150,20 @@ class Index:
         doc_ids: Optional[List[str]] = None,
         source_paths: Optional[List[str]] = None,
     ) -> List[SearchResult]:
+        return self.search_dense(
+            query=query,
+            top_k=top_k,
+            doc_ids=doc_ids,
+            source_paths=source_paths,
+        )
+
+    def search_dense(
+        self,
+        query: str,
+        top_k: int = 5,
+        doc_ids: Optional[List[str]] = None,
+        source_paths: Optional[List[str]] = None,
+    ) -> List[SearchResult]:
         allowed_doc_ids = self._resolve_doc_ids(doc_ids=doc_ids, source_paths=source_paths)
         allowed_vector_ids = self._get_vector_ids_by_doc_ids(allowed_doc_ids) if allowed_doc_ids else None
 
@@ -180,6 +197,83 @@ class Index:
             )
         return results
 
+    def search_bm25(
+        self,
+        query: str,
+        top_k: int = 5,
+        doc_ids: Optional[List[str]] = None,
+        source_paths: Optional[List[str]] = None,
+    ) -> List[SearchResult]:
+        if self.bm25store is None:
+            return []
+
+        allowed_doc_ids = self._resolve_doc_ids(doc_ids=doc_ids, source_paths=source_paths)
+        raw_results = self.bm25store.search(
+            query=query,
+            top_k=top_k,
+            doc_ids=allowed_doc_ids or None,
+            source_paths=source_paths,
+        )
+
+        results: List[SearchResult] = []
+        for item in raw_results:
+            chunk = item.get("chunk") or self.chunkstore.read(chunk_id=item["chunk_id"])
+            if not chunk:
+                continue
+            results.append(
+                SearchResult(
+                    doc_id=item["doc_id"],
+                    chunk_id=item["chunk_id"],
+                    vector_id=-1,
+                    score=float(item["score"]),
+                    chunk=chunk,
+                    extra="bm25",
+                )
+            )
+        return results
+
+    def search_hybrid(
+        self,
+        query: str,
+        top_k_dense: int = 5,
+        top_k_bm25: int = 5,
+        doc_ids: Optional[List[str]] = None,
+        source_paths: Optional[List[str]] = None,
+    ) -> List[SearchResult]:
+        
+        if top_k_dense > 0:
+            dense_results = self.search_dense(
+                query=query,
+                top_k=top_k_dense,
+                doc_ids=doc_ids,
+                source_paths=source_paths,
+            )
+        else:
+            dense_results = []
+            
+        if top_k_bm25 > 0:
+            bm25_results = self.search_bm25(
+                query=query,
+                top_k=top_k_bm25,
+                doc_ids=doc_ids,
+                source_paths=source_paths,
+            )
+        else:
+            bm25_results = []
+            
+        results = dense_results + bm25_results
+        if not results:
+            return []
+
+        merged: List[SearchResult] = []
+        seen_chunk_ids: set[str] = set()
+        for result in results:
+            if result.chunk_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(result.chunk_id)
+            merged.append(result)
+        return merged
+
     def delete_documents(
         self,
         doc_ids: Optional[List[str]] = None,
@@ -210,6 +304,8 @@ class Index:
             self.chunkstore.delete(chunk_id=chunk_id)
         for doc_id in target_doc_ids:
             self.datastore.delete(doc_id=doc_id)
+        if self.bm25store is not None:
+            self.bm25store.delete_by_doc_ids(target_doc_ids)
 
         with self.conn:
             self.conn.executemany(
@@ -260,6 +356,8 @@ class Index:
 
         for chunk_id in existing_chunk_ids:
             self.chunkstore.delete(chunk_id=chunk_id)
+        if self.bm25store is not None:
+            self.bm25store.delete_by_chunk_ids(existing_chunk_ids)
 
         with self.conn:
             self.conn.executemany(
@@ -287,9 +385,33 @@ class Index:
         self.datastore.clear()
         self.chunkstore.clear()
         self.vectorstore.clear()
+        if self.bm25store is not None:
+            self.bm25store.clear()
         with self.conn:
             self.conn.execute("DELETE FROM points")
         self.logger.info("Index data removed")
+
+    def sync_bm25_from_chunkstore(self) -> None:
+        if self.bm25store is None:
+            self.logger.warning("BM25 store is not configured")
+            return
+
+        doc_ids = self.list_documents()
+        progress = tqdm(doc_ids, desc="Sync BM25")
+        synced_chunks = 0
+        for doc_id in progress:
+            chunks = self.get_chunks(doc_id=doc_id)
+            if not chunks:
+                continue
+            payloads = [self._chunk_dict_to_payload(chunk) for chunk in chunks]
+            self.bm25store.add_chunks(payloads)
+            synced_chunks += len(payloads)
+
+        self.logger.info(
+            "BM25 sync completed: %s documents, %s chunks",
+            len(doc_ids),
+            synced_chunks,
+        )
 
     def save_vectorstore(self) -> None:
         self.vectorstore.save()
@@ -331,39 +453,62 @@ class Index:
         doc_id: Optional[str] = None,
         chunk_ids: Optional[List[str]] = None,
         source_path: Optional[str] = None,
+        chunk_indices: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
-        modes = [doc_id is not None, chunk_ids is not None, source_path is not None]
-        if sum(modes) != 1:
+        selectors = [doc_id is not None, chunk_ids is not None, source_path is not None]
+        if sum(selectors) != 1:
             raise ValueError("Exactly one of doc_id, chunk_ids, source_path must be set")
+        if chunk_ids is not None and chunk_indices is not None:
+            raise ValueError("chunk_indices cannot be used together with chunk_ids")
 
         resolved_chunk_ids: List[str]
         if doc_id is not None:
-            rows = self.conn.execute(
-                "SELECT chunk_id FROM points WHERE doc_id = ? ORDER BY vector_id",
-                (doc_id,),
-            ).fetchall()
-            resolved_chunk_ids = [str(row["chunk_id"]) for row in rows]
+            resolved_chunk_ids = self._get_chunk_ids_for_doc_id(doc_id)
         elif chunk_ids is not None:
             resolved_chunk_ids = chunk_ids
         else:
             document = self.get_document(source_path=source_path)
             if not document or not document.doc_id:
                 return []
-            rows = self.conn.execute(
-                "SELECT chunk_id FROM points WHERE doc_id = ? ORDER BY vector_id",
-                (document.doc_id,),
-            ).fetchall()
-            resolved_chunk_ids = [str(row["chunk_id"]) for row in rows]
+            resolved_chunk_ids = self._get_chunk_ids_for_doc_id(document.doc_id)
 
         chunks: List[Dict[str, Any]] = []
         for chunk_id in resolved_chunk_ids:
             chunk = self.chunkstore.read(chunk_id=chunk_id)
             if chunk:
                 chunks.append(chunk)
-        return chunks
+
+        if chunk_indices is None:
+            return chunks
+
+        chunk_by_index = {int(chunk["index"]): chunk for chunk in chunks}
+        filtered_chunks: List[Dict[str, Any]] = []
+        for chunk_index in chunk_indices:
+            chunk = chunk_by_index.get(chunk_index)
+            if chunk is not None:
+                filtered_chunks.append(chunk)
+        return filtered_chunks
 
     def list_documents(self) -> List[str]:
         return self.datastore.get_list_doc_id()
+
+    def resolve_source_path(self, document_name: str) -> Optional[str]:
+        for document in self._iter_documents_from_datastore():
+            if document.source_path == document_name:
+                return document.source_path
+
+        matches = [
+            document.source_path
+            for document in self._iter_documents_from_datastore()
+            if os.path.basename(document.source_path) == document_name
+        ]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise ValueError(
+                f"Multiple documents matched {document_name}: {matches}"
+            )
+        return matches[0]
 
     def info(self) -> Dict[str, Any]:
         doc_ids = self.datastore.get_list_doc_id()
@@ -390,6 +535,8 @@ class Index:
                 "chunks_without_point": len(chunk_ids_set - point_chunk_ids),
             },
         }
+        if self.bm25store is not None:
+            stats["bm25store"] = self.bm25store.info()
         self.logger.info(f"Index stats: {stats}")
         return stats
 
@@ -454,6 +601,13 @@ class Index:
         ).fetchall()
         return [int(row["vector_id"]) for row in rows]
 
+    def _get_chunk_ids_for_doc_id(self, doc_id: str) -> List[str]:
+        rows = self.conn.execute(
+            "SELECT chunk_id FROM points WHERE doc_id = ? ORDER BY vector_id",
+            (doc_id,),
+        ).fetchall()
+        return [str(row["chunk_id"]) for row in rows]
+
     def _get_indexed_source_paths(self) -> set[str]:
         return {
             document.source_path
@@ -465,6 +619,30 @@ class Index:
             document = self.datastore.read(path=path)
             if document:
                 yield document
+
+    @staticmethod
+    def _chunk_to_payload(chunk: Any) -> Dict[str, Any]:
+        return {
+            "chunk_id": chunk.chunk_id,
+            "doc_id": chunk.doc_id,
+            "source_path": chunk.source_path,
+            "text": chunk.text,
+            "index": chunk.index,
+            "page_number": chunk.page_number,
+            "extra": chunk.extra,
+        }
+
+    @staticmethod
+    def _chunk_dict_to_payload(chunk: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "chunk_id": chunk["chunk_id"],
+            "doc_id": chunk["doc_id"],
+            "source_path": chunk["source_path"],
+            "text": chunk["text"],
+            "index": chunk["index"],
+            "page_number": chunk["page_number"],
+            "extra": chunk["extra"],
+        }
 
     def _index_document(
         self,
@@ -493,6 +671,10 @@ class Index:
 
             for chunk in chunks:
                 self.chunkstore.add(chunk)
+            if self.bm25store is not None:
+                self.bm25store.add_chunks(
+                    [self._chunk_to_payload(chunk) for chunk in chunks]
+                )
 
             texts = [chunk.text for chunk in chunks]
             vectors = self.embedder.get_embeddings(texts, text_type="document")

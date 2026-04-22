@@ -2,6 +2,7 @@ data/*
 tests/
 .env
 notes.txt
+hide/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
