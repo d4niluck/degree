@@ -4,6 +4,7 @@ from .v2 import V2Agent
 from .v3 import V3Agent
 from .v4 import V4Agent, create_v4_agent
 from .v5 import create_v5_agent
+from .v6 import create_v6_agent
 
 __all__ = [
     "BaseAgent",
@@ -13,4 +14,5 @@ __all__ = [
     "V4Agent",
     "create_v4_agent",
     "create_v5_agent",
+    "create_v6_agent",
 ]

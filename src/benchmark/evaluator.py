@@ -143,11 +143,13 @@ class BenchmarkEvaluator:
         logger: Optional[logging.Logger] = None,
         results_dir: str | Path = DEFAULT_RESULTS_DIR,
         judge_model_name: str = "gpt-5.2",
+        judge_temperature: Optional[float] = None,
     ) -> None:
         self.judge_llm = judge_llm
         self.logger = logger or logging.getLogger(__name__)
         self.results_dir = Path(results_dir).resolve()
         self.judge_model_name = judge_model_name
+        self.judge_temperature = judge_temperature
 
     def load(self, benchmark_path: str) -> List[BenchmarkSample]:
         path = Path(benchmark_path)
@@ -160,11 +162,12 @@ class BenchmarkEvaluator:
     def evaluate(
         self,
         benchmark_path: str,
-        answer_fn: Callable[[str], str],
         experiment_name: str,
+        answer_fn: Optional[Callable[[str], str]] = None,
         batch: bool = True,
         batch_size: int = 5,
         resume: bool = True,
+        rejudge: bool = False,
     ) -> Dict[str, object]:
         samples = self.load(benchmark_path)
         output_dir = self._resolve_output_dir(
@@ -176,12 +179,28 @@ class BenchmarkEvaluator:
         metrics_path = output_dir / "metrics.csv"
         summary_path = output_dir / "summary.json"
         existing_rows = self._load_existing_rows(answers_path)
-        processed_sample_ids = {str(row["sample_id"]) for row in existing_rows}
-        pending_samples = [
-            sample for sample in samples if sample.sample_id not in processed_sample_ids
-        ]
 
-        answer_rows = list(existing_rows)
+        if rejudge:
+            answer_rows = []
+            pending_samples = []
+            existing_rows_by_sample_id = {
+                str(row["sample_id"]): row for row in existing_rows
+            }
+            samples_to_rejudge = [
+                sample for sample in samples if sample.sample_id in existing_rows_by_sample_id
+            ]
+            if not samples_to_rejudge:
+                raise ValueError(
+                    f"No existing evaluated answers found to rejudge in {answers_path}"
+                )
+        else:
+            processed_sample_ids = {str(row["sample_id"]) for row in existing_rows}
+            pending_samples = [
+                sample for sample in samples if sample.sample_id not in processed_sample_ids
+            ]
+            answer_rows = list(existing_rows)
+            existing_rows_by_sample_id = {}
+
         error_message: Optional[str] = None
 
         self._persist_evaluation_state(
@@ -197,7 +216,22 @@ class BenchmarkEvaluator:
         )
 
         try:
-            if pending_samples:
+            if rejudge:
+                answer_rows = self._rejudge_samples(
+                    samples=samples_to_rejudge,
+                    existing_rows_by_sample_id=existing_rows_by_sample_id,
+                    batch=batch,
+                    batch_size=batch_size,
+                    answers_path=answers_path,
+                    metrics_path=metrics_path,
+                    summary_path=summary_path,
+                    experiment_name=experiment_name,
+                    benchmark_path=benchmark_path,
+                    total_samples=len(samples),
+                )
+            elif pending_samples:
+                if answer_fn is None:
+                    raise ValueError("answer_fn must be provided when rejudge=False")
                 new_rows = self._evaluate_samples(
                     samples=pending_samples,
                     answer_fn=answer_fn,
@@ -307,12 +341,97 @@ class BenchmarkEvaluator:
                 )
         return completed_rows
 
+    def _rejudge_samples(
+        self,
+        samples: List[BenchmarkSample],
+        existing_rows_by_sample_id: Dict[str, Dict[str, Any]],
+        batch: bool,
+        batch_size: int,
+        answers_path: Path,
+        metrics_path: Path,
+        summary_path: Path,
+        experiment_name: str,
+        benchmark_path: str,
+        total_samples: int,
+    ) -> List[Dict[str, Any]]:
+        answer_rows: List[Dict[str, Any]] = []
+
+        if not batch:
+            for sample in tqdm(samples, desc="Rejudging benchmark"):
+                row = self._rejudge_single_sample(
+                    sample=sample,
+                    existing_row=existing_rows_by_sample_id[sample.sample_id],
+                )
+                answer_rows.append(row)
+                self._persist_evaluation_state(
+                    answers_path=answers_path,
+                    metrics_path=metrics_path,
+                    summary_path=summary_path,
+                    answer_rows=answer_rows,
+                    experiment_name=experiment_name,
+                    benchmark_path=benchmark_path,
+                    total_samples=total_samples,
+                    status="running",
+                    error_message=None,
+                )
+            return answer_rows
+
+        max_workers = max(1, batch_size)
+        completed_rows: List[Dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_sample_id = {
+                executor.submit(
+                    self._rejudge_single_sample,
+                    sample,
+                    existing_rows_by_sample_id[sample.sample_id],
+                ): sample.sample_id
+                for sample in samples
+            }
+            for future in tqdm(as_completed(future_to_sample_id), total=len(samples), desc="Rejudging benchmark"):
+                row = future.result()
+                completed_rows.append(row)
+                answer_rows.append(row)
+                self._persist_evaluation_state(
+                    answers_path=answers_path,
+                    metrics_path=metrics_path,
+                    summary_path=summary_path,
+                    answer_rows=answer_rows,
+                    experiment_name=experiment_name,
+                    benchmark_path=benchmark_path,
+                    total_samples=total_samples,
+                    status="running",
+                    error_message=None,
+                )
+        return completed_rows
+
     def _evaluate_single_sample(
         self,
         sample: BenchmarkSample,
         answer_fn: Callable[[str], str],
     ) -> Dict[str, Any]:
         agent_answer = self._call_answer_fn(answer_fn=answer_fn, question=sample.question)
+        judge_result = self._judge_sample(sample=sample, agent_answer=agent_answer)
+        metrics = self._extract_metrics(sample=sample, judge_result=judge_result)
+        return {
+            "sample_id": sample.sample_id,
+            "question_type": sample.question_type.value,
+            "question": sample.question,
+            "gold_answer": sample.gold_answer,
+            "agent_answer": agent_answer,
+            "source_path": sample.source_path,
+            "page_number": sample.page_number,
+            "judge_schema_name": sample.judge_schema_name,
+            "judge_result": json.dumps(judge_result.model_dump(mode="json"), ensure_ascii=False),
+            "criteria": json.dumps(sample.criteria, ensure_ascii=False),
+            **metrics,
+        }
+
+    def _rejudge_single_sample(
+        self,
+        sample: BenchmarkSample,
+        existing_row: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        agent_answer = str(existing_row["agent_answer"]).strip()
         judge_result = self._judge_sample(sample=sample, agent_answer=agent_answer)
         metrics = self._extract_metrics(sample=sample, judge_result=judge_result)
         return {
@@ -336,7 +455,11 @@ class BenchmarkEvaluator:
     def _judge_sample(self, sample: BenchmarkSample, agent_answer: str):
         schema = JUDGE_SCHEMA_BY_TYPE[sample.question_type]
         prompt = self._build_judge_prompt(sample=sample, agent_answer=agent_answer)
-        return self.judge_llm.parse(prompt, schema, temperature=0)
+        return self.judge_llm.parse(
+            prompt,
+            schema,
+            temperature=self.judge_temperature,
+        )
 
     def _build_judge_prompt(self, sample: BenchmarkSample, agent_answer: str) -> str:
         prompt = JUDGE_PROMPT_TEMPLATE.format(
