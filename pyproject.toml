@@ -26,6 +26,7 @@ dependencies = [
     "fastapi>=0.135.3",
     "uvicorn>=0.43.0",
     "opensearch-py>=3.1.0",
+    "firecrawl-py>=4.23.0",
 ]
 
 [tool.pytest.ini_options]

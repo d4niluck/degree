@@ -4,6 +4,7 @@ tests/
 notes.txt
 src/agents/clients
 hide/
+src/tree_rag/PageIndex/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
