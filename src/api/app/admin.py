@@ -51,6 +51,21 @@ def delete_user(target_user_id: str, request: Request, user=Depends(get_current_
     require_admin(user)
     conn = connect(request.app.state.app_db_path)
     with conn:
+        kb_ids = conn.execute(
+            "SELECT kb_id FROM knowledge_bases WHERE owner_user_id = ?",
+            (target_user_id,),
+        ).fetchall()
+        for kb_id_row in kb_ids:
+            conversation_ids = conn.execute(
+                "SELECT conversation_id FROM conversations WHERE kb_id = ?",
+                (kb_id_row["kb_id"],),
+            ).fetchall()
+            for conversation_id_row in conversation_ids:
+                conn.execute(
+                    "DELETE FROM conversation_messages WHERE conversation_id = ?",
+                    (conversation_id_row["conversation_id"],),
+                )
+            conn.execute("DELETE FROM conversations WHERE kb_id = ?", (kb_id_row["kb_id"],))
         conn.execute("DELETE FROM user_kb_access WHERE user_id = ?", (target_user_id,))
         conn.execute("DELETE FROM knowledge_bases WHERE owner_user_id = ?", (target_user_id,))
         conn.execute("DELETE FROM users WHERE user_id = ?", (target_user_id,))
@@ -130,6 +145,16 @@ def delete_knowledge_base(kb_id: str, request: Request, user=Depends(get_current
         (kb_id,),
     ).fetchone()
     with conn:
+        conversation_ids = conn.execute(
+            "SELECT conversation_id FROM conversations WHERE kb_id = ?",
+            (kb_id,),
+        ).fetchall()
+        for conversation_id_row in conversation_ids:
+            conn.execute(
+                "DELETE FROM conversation_messages WHERE conversation_id = ?",
+                (conversation_id_row["conversation_id"],),
+            )
+        conn.execute("DELETE FROM conversations WHERE kb_id = ?", (kb_id,))
         conn.execute("DELETE FROM user_kb_access WHERE kb_id = ?", (kb_id,))
         conn.execute("DELETE FROM knowledge_bases WHERE kb_id = ?", (kb_id,))
     conn.close()

@@ -94,6 +94,9 @@ def create_app() -> FastAPI:
         logger=logger,
         embedder_url=os.getenv("EMBEDDER_API_URL", "http://127.0.0.1:8001"),
         reader_url=os.getenv("READER_API_URL", "http://127.0.0.1:8002"),
+        opensearch_host=os.getenv("OPENSEARCH_HOST", "127.0.0.1"),
+        opensearch_port=int(os.getenv("OPENSEARCH_PORT", "9201")),
+        opensearch_index_prefix=os.getenv("OPENSEARCH_INDEX_PREFIX", "kb"),
     )
     app.state.llm = OpenAILLM(
         client=client,
@@ -110,3 +113,6 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+# uv run uvicorn src.api.app.main:app --host 127.0.0.1 --port 8000 --reload

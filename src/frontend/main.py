@@ -45,7 +45,7 @@ def invalidate_admin_tables() -> None:
 def invalidate_user_data() -> None:
     st.session_state.pop("user_bases_df", None)
     for key in list(st.session_state):
-        if str(key).startswith("user_documents_df_"):
+        if str(key).startswith("user_documents_df_") or str(key).startswith("user_conversations_df_") or str(key).startswith("conversation_detail_") or str(key).startswith("conversation_token_usage_") or str(key).startswith("selected_conversation_"):
             st.session_state.pop(key, None)
 
 
@@ -168,6 +168,143 @@ def ask_question(kb_id: str, question: str, source_paths: list[str] | None) -> s
     )
     response.raise_for_status()
     return response.json()["answer"]
+
+
+def fetch_conversations_df(kb_id: str) -> pd.DataFrame:
+    response = requests.get(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations",
+        headers=auth_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    rows = response.json()
+    columns = ["conversation_id", "kb_id", "title", "created_at", "updated_at", "message_count"]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    dataframe = pd.DataFrame(rows)
+    columns = [column for column in columns if column in dataframe.columns]
+    return dataframe[columns]
+
+
+def create_conversation(kb_id: str, title: str | None = None) -> dict:
+    response = requests.post(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations",
+        json={"title": title},
+        headers=auth_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    st.session_state.pop(f"user_conversations_df_{kb_id}", None)
+    return response.json()
+
+
+def delete_conversation(kb_id: str, conversation_id: str) -> None:
+    response = requests.delete(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}",
+        headers=auth_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    st.session_state.pop(f"user_conversations_df_{kb_id}", None)
+    st.session_state.pop(f"conversation_detail_{conversation_id}", None)
+    st.session_state.pop(f"conversation_token_usage_{conversation_id}", None)
+
+
+def fetch_conversation_detail(kb_id: str, conversation_id: str) -> dict:
+    response = requests.get(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}",
+        headers=auth_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def send_conversation_message(
+    kb_id: str,
+    conversation_id: str,
+    question: str,
+    source_paths: list[str] | None,
+) -> str:
+    response = requests.post(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}/messages",
+        json={
+            "question": question,
+            "top_k": 10,
+            "source_paths": source_paths,
+        },
+        headers=auth_headers(),
+        timeout=600,
+    )
+    response.raise_for_status()
+    st.session_state.pop(f"user_conversations_df_{kb_id}", None)
+    st.session_state.pop(f"conversation_detail_{conversation_id}", None)
+    st.session_state.pop(f"conversation_token_usage_{conversation_id}", None)
+    return response.json()["answer"]
+
+
+def stream_conversation_message(
+    kb_id: str,
+    conversation_id: str,
+    question: str,
+    source_paths: list[str] | None,
+):
+    response = requests.post(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}/messages/stream",
+        json={
+            "question": question,
+            "top_k": 10,
+            "source_paths": source_paths,
+        },
+        headers=auth_headers(),
+        timeout=600,
+        stream=True,
+    )
+    response.raise_for_status()
+    try:
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            yield requests.models.complexjson.loads(line)
+    finally:
+        response.close()
+    st.session_state.pop(f"user_conversations_df_{kb_id}", None)
+    st.session_state.pop(f"conversation_detail_{conversation_id}", None)
+    st.session_state.pop(f"conversation_token_usage_{conversation_id}", None)
+
+
+def fetch_conversation_token_usage(kb_id: str, conversation_id: str) -> dict:
+    response = requests.get(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}/token-usage",
+        headers=auth_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def clear_conversation(kb_id: str, conversation_id: str) -> None:
+    response = requests.post(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}/clear",
+        headers=auth_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    st.session_state.pop(f"user_conversations_df_{kb_id}", None)
+    st.session_state.pop(f"conversation_detail_{conversation_id}", None)
+    st.session_state.pop(f"conversation_token_usage_{conversation_id}", None)
+
+
+def summarize_conversation(kb_id: str, conversation_id: str) -> None:
+    response = requests.post(
+        f"{API_BASE_URL}/knowledge-bases/{kb_id}/conversations/{conversation_id}/summarize",
+        headers=auth_headers(),
+        timeout=120,
+    )
+    response.raise_for_status()
+    st.session_state.pop(f"user_conversations_df_{kb_id}", None)
+    st.session_state.pop(f"conversation_detail_{conversation_id}", None)
+    st.session_state.pop(f"conversation_token_usage_{conversation_id}", None)
 
 
 def save_uploaded_file(uploaded_file) -> str:
@@ -499,32 +636,116 @@ def render_user_kb_selector(kb_df: pd.DataFrame) -> str | None:
 
 
 def render_assistant_chat(kb_id: str, selected_source_paths: list[str] | None) -> None:
-    chat_state_key = f"last_chat_message_{kb_id}"
-    last_message = st.session_state.get(chat_state_key)
-    if last_message:
-        with st.chat_message("user"):
-            st.markdown(last_message["question"])
-        with st.chat_message("assistant"):
-            st.markdown(last_message["answer"])
+    conversations_key = f"user_conversations_df_{kb_id}"
+    if conversations_key not in st.session_state:
+        try:
+            st.session_state[conversations_key] = fetch_conversations_df(kb_id)
+        except Exception as exc:
+            st.error(f"Не удалось загрузить диалоги: {exc}")
+            st.session_state[conversations_key] = pd.DataFrame(
+                columns=["conversation_id", "kb_id", "title", "created_at", "updated_at", "message_count"]
+            )
+
+    conversations_df = st.session_state[conversations_key]
+    if conversations_df.empty:
+        try:
+            created = create_conversation(kb_id)
+            st.session_state[conversations_key] = fetch_conversations_df(kb_id)
+            st.session_state[f"selected_conversation_{kb_id}"] = created["conversation_id"]
+            conversations_df = st.session_state[conversations_key]
+        except Exception as exc:
+            st.error(f"Не удалось создать диалог: {exc}")
+            return
+
+    current_conversation_key = f"selected_conversation_{kb_id}"
+    selected_conversation = str(conversations_df.iloc[0]["conversation_id"])
+    st.session_state[current_conversation_key] = selected_conversation
+
+    token_usage_key = f"conversation_token_usage_{selected_conversation}"
+    if token_usage_key not in st.session_state:
+        try:
+            st.session_state[token_usage_key] = fetch_conversation_token_usage(kb_id, selected_conversation)
+        except Exception:
+            st.session_state[token_usage_key] = {"estimated_tokens": 0, "message_count": 0}
+    usage = st.session_state[token_usage_key]
+
+    st.caption(
+        f"Сообщений: {usage.get('message_count', 0)} | "
+        f"Оценка токенов: {usage.get('estimated_tokens', 0)}"
+    )
+
+    detail_key = f"conversation_detail_{selected_conversation}"
+    if detail_key not in st.session_state:
+        try:
+            st.session_state[detail_key] = fetch_conversation_detail(kb_id, selected_conversation)
+        except Exception as exc:
+            st.error(f"Не удалось загрузить сообщения диалога: {exc}")
+            return
+    conversation_detail = st.session_state[detail_key]
+
+    chat_container = st.container(height=700, border=True)
+    with chat_container:
+        for message in conversation_detail.get("messages", []):
+            role = "assistant" if message["role"] != "user" else "user"
+            with st.chat_message(role):
+                st.markdown(message["content"])
 
     question = st.chat_input("Задайте вопрос по выбранным документам")
+    clear_col, summarize_col, _ = st.columns([1.6, 1.6, 2.8])
+    with clear_col:
+        if st.button("Очистить", key=f"clear_conversation_{kb_id}", use_container_width=True):
+            try:
+                clear_conversation(kb_id, selected_conversation)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Не удалось очистить диалог: {exc}")
+    with summarize_col:
+        if st.button("Суммаризировать", key=f"summarize_conversation_{kb_id}", use_container_width=True):
+            try:
+                summarize_conversation(kb_id, selected_conversation)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Не удалось суммаризировать диалог: {exc}")
+
     if not question:
         return
     if not selected_source_paths:
         st.warning("Выберите хотя бы один документ для поиска")
         return
 
-    with st.chat_message("user"):
-        st.markdown(question)
+    with chat_container:
+        with st.chat_message("user"):
+            st.markdown(question)
     try:
-        with st.chat_message("assistant"):
-            with st.spinner("Формирую ответ"):
-                answer = ask_question(kb_id, question, selected_source_paths)
-            st.markdown(answer)
-        st.session_state[chat_state_key] = {
-            "question": question,
-            "answer": answer,
-        }
+        with chat_container:
+            with st.chat_message("assistant"):
+                status_placeholder = st.empty()
+                answer_placeholder = st.empty()
+                answer = ""
+                for event in stream_conversation_message(
+                    kb_id,
+                    selected_conversation,
+                    question,
+                    selected_source_paths,
+                ):
+                    event_type = event.get("type")
+                    if event_type == "iteration":
+                        iteration = int(event.get("iteration", 0) or 0)
+                        if iteration > 0:
+                            status_placeholder.markdown(
+                                f"Изучаю документы: {iteration} итераций поиска"
+                            )
+                    elif event_type == "final_answer":
+                        answer = str(event.get("answer", "")).strip()
+                        status_placeholder.empty()
+                        answer_placeholder.markdown(answer)
+                    elif event_type == "error":
+                        raise RuntimeError(event.get("error", "Неизвестная ошибка"))
+                if not answer:
+                    raise RuntimeError("Пустой ответ от сервера")
+        st.session_state.pop(detail_key, None)
+        st.session_state.pop(token_usage_key, None)
+        st.session_state.pop(conversations_key, None)
     except Exception as exc:
         st.error(f"Не удалось получить ответ: {exc}")
 

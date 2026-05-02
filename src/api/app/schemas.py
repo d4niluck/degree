@@ -62,3 +62,50 @@ class AskRequest(BaseModel):
     question: str
     top_k: int = 10
     source_paths: Optional[List[str]] = None
+
+
+class ConversationCreateRequest(BaseModel):
+    title: Optional[str] = None
+
+
+class ConversationResponse(BaseModel):
+    conversation_id: str
+    kb_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+
+
+class ConversationMessageResponse(BaseModel):
+    message_id: str
+    role: str
+    content: str
+    created_at: str
+
+
+class ConversationDetailResponse(BaseModel):
+    conversation_id: str
+    kb_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    messages: List[ConversationMessageResponse]
+
+
+class ConversationAskResponse(BaseModel):
+    answer: str
+    conversation_id: str
+    title: str
+
+
+class ConversationTokenUsageResponse(BaseModel):
+    conversation_id: str
+    message_count: int
+    char_count: int
+    estimated_tokens: int
+
+
+class ConversationSummaryResponse(BaseModel):
+    conversation_id: str
+    summary: str
