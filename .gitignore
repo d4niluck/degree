@@ -4,6 +4,7 @@ tests/
 notes.txt
 src/agents/clients
 hide/
+paper/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
