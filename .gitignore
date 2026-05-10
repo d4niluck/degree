@@ -5,6 +5,7 @@ notes.txt
 src/agents/clients
 hide/
 paper/
+src/tree_rag/test_index
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
